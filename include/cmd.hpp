@@ -1,5 +1,13 @@
-#ifndef CMDLINE_HPP
-#define CMDLINE_HPP
+// -------------------------------------------------------------------------------------
+//
+// docs: https://github.com/ErenKarakas1/cpputils/blob/main/docs/cmd.md
+// src: https://github.com/ErenKarakas1/cpputils
+// license: MIT
+//
+// -------------------------------------------------------------------------------------
+
+#ifndef UTILS_CMDLINE_HPP
+#define UTILS_CMDLINE_HPP
 
 #include "common.hpp"
 
@@ -41,43 +49,43 @@ enum class ArgType : u8 {
 
 class Arg {
 public:
-    explicit Arg(std::string_view name) : name_(name) {}
+    explicit Arg(const std::string_view name) : name_(name) {}
 
-    static Arg flag(std::string_view name) {
+    static Arg flag(const std::string_view name) {
         Arg arg(name);
         arg.type_ = ArgType::Flag;
         return arg;
     }
 
-    static Arg option(std::string_view name) {
+    static Arg option(const std::string_view name) {
         Arg arg(name);
         arg.type_ = ArgType::Option;
         arg.value_name_ = "VALUE";
         return arg;
     }
 
-    static Arg positional(std::string_view name) {
+    static Arg positional(const std::string_view name) {
         Arg arg(name);
         arg.type_ = ArgType::Positional;
         return arg;
     }
 
-    Arg& short_alias(char c) {
+    Arg& short_alias(const char c) {
         short_ = c;
         return *this;
     }
 
-    Arg& long_alias(std::string_view name) {
+    Arg& long_alias(const std::string_view name) {
         long_ = name;
         return *this;
     }
 
-    Arg& about(std::string_view description) {
+    Arg& about(const std::string_view description) {
         description_ = description;
         return *this;
     }
 
-    Arg& value_name(std::string_view name) {
+    Arg& value_name(const std::string_view name) {
         value_name_ = name;
         return *this;
     }
@@ -87,12 +95,12 @@ public:
         return *this;
     }
 
-    Arg& required(bool req = true) {
+    Arg& required(const bool req = true) {
         required_ = req;
         return *this;
     }
 
-    Arg& multiple(bool multiple = true) {
+    Arg& multiple(const bool multiple = true) {
         multiple_ = multiple;
         return *this;
     }
@@ -140,64 +148,68 @@ private:
 constexpr Arg arg(std::string_view spec) {
     // Required positional argument
     if (spec.starts_with('<') && spec.ends_with('>')) {
-        auto name = spec.substr(1, spec.length() - 2);
+        const auto name = spec.substr(1, spec.length() - 2);
         return Arg::positional(name).required(true);
     }
 
     // Optional positional argument
     if (spec.starts_with('[') && spec.ends_with(']')) {
-        auto name = spec.substr(1, spec.length() - 2);
+        const auto name = spec.substr(1, spec.length() - 2);
         return Arg::positional(name).required(false);
     }
 
     if (spec.starts_with('-')) {
         bool is_option = false;
         std::string_view flag_part = spec;
-        
+        std::string_view value_part;
+
         // Look for <VALUE> pattern at the end
-        std::size_t angle_start = spec.find('<');
+        const std::size_t angle_start = spec.find('<');
         if (angle_start != std::string_view::npos) {
-            std::size_t angle_end = spec.find('>', angle_start);
+            const std::size_t angle_end = spec.find('>', angle_start);
             if (angle_end != std::string_view::npos && angle_end == spec.length() - 1) {
                 is_option = true;
                 flag_part = spec.substr(0, angle_start);
                 flag_part = flag_part.substr(0, flag_part.find_last_not_of(' ') + 1);
+                value_part = spec.substr(angle_start + 1, angle_end - angle_start - 1);
             }
         }
 
         Arg result_arg = is_option ? Arg::option("") : Arg::flag("");
 
-        std::size_t space_pos = flag_part.find(' ');
+        const std::size_t space_pos = flag_part.find(' ');
         if (space_pos != std::string_view::npos) {
             // Has both short and long forms
-            auto short_part = flag_part.substr(0, space_pos);
-            auto long_part = flag_part.substr(space_pos + 1);
-            
+            const auto short_part = flag_part.substr(0, space_pos);
+            const auto long_part = flag_part.substr(space_pos + 1);
+
             char short_alias = '\0';
             if (short_part.starts_with('-') && short_part.length() == 2) {
                 short_alias = short_part[1];
                 result_arg.short_alias(short_alias);
             }
-            
+
             if (long_part.starts_with("--") && long_part.length() > 2) {
-                auto long_name = long_part.substr(2);
+                const auto long_name = long_part.substr(2);
                 result_arg = is_option ? Arg::option(long_name) : Arg::flag(long_name);
                 result_arg.short_alias(short_alias).long_alias(long_name);
             }
 
+            if (is_option && !value_part.empty()) result_arg.value_name(value_part);
             return result_arg;
         }
 
         if (flag_part.starts_with("--") && flag_part.length() > 2) {
-            auto long_name = flag_part.substr(2);
+            const auto long_name = flag_part.substr(2);
             result_arg = is_option ? Arg::option(long_name) : Arg::flag(long_name);
             result_arg.long_alias(long_name);
         } else if (flag_part.starts_with('-') && flag_part.length() == 2) {
-            char short_char = flag_part[1];
+            const char short_char = flag_part[1];
             result_arg = is_option ? Arg::option(std::string(1, short_char)) : Arg::flag(std::string(1, short_char));
             result_arg.short_alias(short_char);
         }
-        
+
+        if (is_option && !value_part.empty()) result_arg.value_name(value_part);
         return result_arg;
     }
 
@@ -239,30 +251,30 @@ public:
     }
 
     template <typename T = std::string>
-    std::optional<T> get_one(std::string_view name) const {
-        auto it = values_.find(std::string(name));
+    [[nodiscard]] std::optional<T> get_one(const std::string_view name) const {
+        const auto it = values_.find(std::string(name));
         if (it == values_.end() || it->second.empty()) {
             return std::nullopt;
         }
         return parse_value<T>(it->second.front());
     }
 
-    std::vector<std::string> get_many(std::string_view name) const {
-        auto it = values_.find(std::string(name));
+    [[nodiscard]] std::vector<std::string> get_many(const std::string_view name) const {
+        const auto it = values_.find(std::string(name));
         if (it == values_.end() || it->second.empty()) {
             return {};
         }
         return it->second;
     }
 
-    std::optional<std::pair<std::string, std::unique_ptr<ArgMatches>>> subcommand() const {
+    [[nodiscard]] std::optional<std::pair<std::string, std::unique_ptr<ArgMatches>>> subcommand() const {
         if (subcommand_name_.empty()) {
             return std::nullopt;
         }
         return std::make_pair(subcommand_name_, std::make_unique<ArgMatches>(*subcommand_matches_));
     }
 
-    void set_flag(const std::string& name, bool value) {
+    void set_flag(const std::string& name, const bool value) {
         flags_[name] = value;
     }
 
@@ -308,7 +320,7 @@ struct ParseResult {
 
 class Command {
 public:
-    explicit Command(std::string_view name, std::string_view description = "")
+    explicit Command(const std::string_view name, const std::string_view description = "")
         : name_(name), description_(description) {}
 
     Command& subcommand(const Command& cmd) {
@@ -354,17 +366,11 @@ public:
         return *this;
     }
 
-    ParseResult get_matches(int argc, char** argv) const {
+    ParseResult get_matches(const int argc, char** argv) const {
         ArgMatches matches;
         int current_argc = argc;
         char** current_argv = argv;
-
-        // Skip program name
-        if (current_argc > 0) {
-            current_argc--;
-            current_argv++;
-        }
-
+        shift(current_argc, current_argv); // Skip program name
         return parse_args(matches, current_argc, current_argv);
     }
 
@@ -497,36 +503,34 @@ private:
                 if constexpr (std::is_same_v<U, std::monostate>) {
                     return {};
                 } else if constexpr (std::is_same_v<U, char>) {
-                    return std::format("'{}'", value);
+                    return std::format("'{}'", FORWARD(value));
                 } else if constexpr (std::is_same_v<U, std::string>) {
-                    return std::format("\"{}\"", value);
+                    return std::format("\"{}\"", FORWARD(value));
                 } else {
-                    return std::format("{}", value);
+                    return std::format("{}", FORWARD(value));
                 }
-            },
-            var);
+            }, var);
     }
 
-    ParseResult parse_args(ArgMatches& matches, int argc, char** argv) const {
+    ParseResult parse_args(ArgMatches& matches, const int argc, char** argv) const {
         int current_argc = argc;
         char** current_argv = argv;
         std::size_t positional_index = 0;
 
         while (current_argc > 0) {
-            std::string_view arg = *current_argv;
+            const std::string_view arg = *current_argv;
 
             // Check for subcommands first
             for (const auto& subcmd : subcommands_) {
-                if (arg == subcmd.name()) {
-                    shift(current_argc, current_argv);
-                    ArgMatches temp_matches;
-                    auto [res, err] = subcmd.parse_args(temp_matches, current_argc, current_argv);
-                    if (err != ParseError::None) {
-                        return {.matches = {}, .error = err};
-                    }
-                    matches.set_subcommand(std::string(arg), std::make_unique<ArgMatches>(res));
-                    return {.matches = matches, .error = ParseError::None};
-                }
+                if (arg != subcmd.name()) continue;
+                shift(current_argc, current_argv);
+
+                ArgMatches temp_matches;
+                auto [res, err] = subcmd.parse_args(temp_matches, current_argc, current_argv);
+                if (err != ParseError::None) return {.matches = {}, .error = err};
+
+                matches.set_subcommand(std::string(arg), std::make_unique<ArgMatches>(res));
+                return {.matches = matches, .error = ParseError::None};
             }
 
             // Check for --
@@ -565,15 +569,8 @@ private:
         // Validate required arguments
         for (const Arg& arg : args_) {
             if (!arg.is_required()) continue;
-
-            bool found = false;
-            if (arg.type() == ArgType::Flag) {
-                found = matches.get_flag(arg.name());
-            } else {
-                auto value = matches.get_one<std::string>(arg.name());
-                found = value.has_value();
-            }
-
+            const bool found = arg.type() == ArgType::Flag ? matches.get_flag(arg.name())
+                                                           : matches.get_one<std::string>(arg.name()).has_value();
             if (!found) {
                 return {.matches = {}, .error = ParseError::MissingRequiredArgument};
             }
@@ -587,7 +584,7 @@ private:
         return {.matches = matches, .error = ParseError::None};
     }
 
-    [[nodiscard]] const Arg* find_positional_arg(std::size_t index) const {
+    [[nodiscard]] const Arg* find_positional_arg(const std::size_t index) const {
         std::size_t pos_count = 0;
         for (const Arg& cmd_arg : args_) {
             if (cmd_arg.type() == ArgType::Positional) {
@@ -598,14 +595,14 @@ private:
         return nullptr;
     }
 
-    [[nodiscard]] const Arg* find_flag_by_short(char short_alias) const {
+    [[nodiscard]] const Arg* find_flag_by_short(const char short_alias) const {
         for (const Arg& cmd_arg : args_) {
             if (cmd_arg.short_alias() == short_alias) return &cmd_arg;
         }
         return nullptr;
     }
 
-    [[nodiscard]] const Arg* find_flag_by_long(std::string_view long_alias) const {
+    [[nodiscard]] const Arg* find_flag_by_long(const std::string_view long_alias) const {
         for (const auto& cmd_arg : args_) {
             if (cmd_arg.long_alias() == long_alias || cmd_arg.name() == long_alias) return &cmd_arg;
         }
@@ -626,4 +623,4 @@ private:
 
 } // namespace utils::cmd
 
-#endif // CMDLINE_HPP
+#endif // UTILS_CMDLINE_HPP

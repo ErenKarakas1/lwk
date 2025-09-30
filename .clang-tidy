@@ -13,6 +13,7 @@ Checks: >
   cert-*,
   clang-analyzer-*,
   concurrency-*,
+  -bugprone-easily-swappable-parameters,
   -modernize-use-trailing-return-type,
   -readability-braces-around-statements,
   -readability-identifier-length,
