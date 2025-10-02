@@ -1,13 +1,13 @@
 // -------------------------------------------------------------------------------------
 //
-// docs: https://github.com/ErenKarakas1/cpputils/blob/main/docs/cmd.md
+// docs: https://github.com/ErenKarakas1/cpputils/blob/main/docs/cli.md
 // src: https://github.com/ErenKarakas1/cpputils
 // license: MIT
 //
 // -------------------------------------------------------------------------------------
 
-#ifndef UTILS_CMDLINE_HPP
-#define UTILS_CMDLINE_HPP
+#ifndef UTILS_CLI_HPP
+#define UTILS_CLI_HPP
 
 #include "common.hpp"
 
@@ -22,9 +22,9 @@
 #include <variant>
 #include <vector>
 
-namespace utils::cmd {
+namespace utils::cli {
 
-using ValueType = std::variant<bool, i64, u64, f64, char, std::string, std::monostate>;
+using ValueType = std::variant<std::monostate, char, std::string, bool, i64, u64, f64>;
 
 constexpr std::optional<std::string_view> shift(int& argc, char**& argv) {
     if (argc == 0) [[unlikely]] {
@@ -200,12 +200,13 @@ constexpr Arg arg(std::string_view spec) {
         }
 
         if (flag_part.starts_with("--") && flag_part.length() > 2) {
-            const auto long_name = flag_part.substr(2);
+            const std::string_view long_name = flag_part.substr(2);
             result_arg = is_option ? Arg::option(long_name) : Arg::flag(long_name);
             result_arg.long_alias(long_name);
         } else if (flag_part.starts_with('-') && flag_part.length() == 2) {
             const char short_char = flag_part[1];
-            result_arg = is_option ? Arg::option(std::string(1, short_char)) : Arg::flag(std::string(1, short_char));
+            const std::string short_str(1, short_char);
+            result_arg = is_option ? Arg::option(short_str) : Arg::flag(short_str);
             result_arg.short_alias(short_char);
         }
 
@@ -246,13 +247,14 @@ public:
 
     ArgMatches& operator=(ArgMatches&&) = default;
 
-    bool get_flag(const std::string& name) {
-        return flags_.contains(name) && flags_[name];
+    bool get_flag(const std::string& name) const {
+        const auto it = flags_.find(name);
+        return it != flags_.end() && it->second;
     }
 
     template <typename T = std::string>
-    [[nodiscard]] std::optional<T> get_one(const std::string_view name) const {
-        const auto it = values_.find(std::string(name));
+    [[nodiscard]] std::optional<T> get_one(const std::string& name) const {
+        const auto it = values_.find(name);
         if (it == values_.end() || it->second.empty()) {
             return std::nullopt;
         }
@@ -311,21 +313,48 @@ private:
     }
 };
 
-enum class ParseError : u8 { None, MissingRequiredArgument, MissingSubcommand };
+struct ParseError {
+
+    enum class ParseErrorType : u8 {
+        None,
+        MissingRequiredArgument,
+        MissingRequiredSubcommand,
+    };
+
+    ParseErrorType type;
+    std::string message;
+
+    [[nodiscard]] constexpr bool has_error() const {
+        return type != ParseErrorType::None;
+    }
+
+    static constexpr ParseError None() {
+        return {.type = ParseErrorType::None, .message = ""};
+    }
+
+    static constexpr ParseError MissingRequiredArgument(const std::string& cmd_name, const std::string& arg_name) {
+        return {.type = ParseErrorType::MissingRequiredArgument, .message = std::format("Missing required argument '{}' for command '{}'", arg_name, cmd_name)};
+    }
+
+    static constexpr ParseError MissingRequiredSubcommand(const std::string& cmd_name) {
+        return {.type = ParseErrorType::MissingRequiredSubcommand, .message = std::format("Missing required subcommand for command '{}'", cmd_name)};
+    }
+};
 
 struct ParseResult {
     ArgMatches matches;
-    ParseError error = ParseError::None;
+    ParseError error;
 };
 
 class Command {
 public:
     explicit Command(const std::string_view name, const std::string_view description = "")
-        : name_(name), description_(description) {}
+        : name_(name), description_(description) {
+        ASSERT(!name_.empty(), "Command name cannot be empty");
+    }
 
     Command& subcommand(const Command& cmd) {
-        ASSERT(!cmd.name().empty(), "Subcommand must have a name");
-        max_cmd_len = std::max(max_cmd_len, cmd.name().size());
+        if (cmd.name().size() > max_cmd_len) max_cmd_len = cmd.name().size();
         subcommands_.push_back(cmd);
         return *this;
     }
@@ -360,7 +389,7 @@ public:
         if (!arg.value_name().empty() && arg.type() == ArgType::Option) {
             curr_opt_len += arg.value_name().size() + 3; // " <value>"
         }
-        max_opt_len = std::max(max_opt_len, curr_opt_len);
+        if (curr_opt_len > max_opt_len) max_opt_len = curr_opt_len;
 
         args_.push_back(arg);
         return *this;
@@ -398,21 +427,20 @@ public:
     }
 
     void print_help() const {
-        std::string buffer = std::format("Usage: {}", name_);
+        std::print("Usage: {}", name_);
 
-        // Add positional arguments to usage
         for (const Arg& arg : args_) {
             if (arg.type() == ArgType::Positional) {
                 if (arg.is_required()) {
-                    buffer += std::format(" <{}>", arg.name());
+                    std::print(" <{}>", arg.name());
                 } else {
-                    buffer += std::format(" [{}]", arg.name());
+                    std::print(" [{}]", arg.name());
                 }
             }
         }
 
         if (!subcommands_.empty()) {
-            buffer += " <COMMAND>";
+            std::print(" <COMMAND>");
         }
 
         // Check if we have any non-positional args for [OPTIONS]
@@ -424,65 +452,66 @@ public:
             }
         }
         if (has_options) {
-            buffer += " [OPTIONS]";
+            std::print(" [OPTIONS]");
         }
 
-        buffer += "\n";
+        std::println();
         if (!description_.empty()) {
-            buffer += description_;
+            std::print("{}", description_);
         }
-        buffer += '\n';
+        std::println();
 
         if (!subcommands_.empty()) {
-            buffer += "\nCommands:\n";
+            std::println("\nCommands:");
             for (const Command& cmd : subcommands_) {
-                buffer += std::format("    {}{}", cmd.name(), std::string(max_cmd_len - cmd.name().size(), ' '));
+                std::print("    {}{:{}}", cmd.name(), "", max_cmd_len - cmd.name().size());
                 if (!cmd.description().empty()) {
-                    buffer += std::format("    {}", cmd.description());
+                    std::print("    {}", cmd.description());
                 }
-                buffer += '\n';
+                std::println();
             }
         }
 
         if (has_options) {
-            buffer += "\nOptions:\n";
-            std::string opt_buffer;
-            opt_buffer.reserve(max_opt_len);
+            std::println("\nOptions:");
 
             for (const Arg& arg : args_) {
                 if (arg.type() == ArgType::Positional) continue;
 
-                opt_buffer.clear();
+                std::print("    ");
+                std::size_t written = 0;
+
                 if (arg.short_alias() != '\0') {
-                    opt_buffer += std::format("-{}", arg.short_alias());
+                    std::print("-{}", arg.short_alias());
+                    written += 2;
                 }
 
-                std::string long_name = arg.long_alias().empty() ? arg.name() : arg.long_alias();
+                const std::string& long_name = arg.long_alias().empty() ? arg.name() : arg.long_alias();
                 if (!long_name.empty()) {
-                    if (!opt_buffer.empty()) {
-                        opt_buffer += ", ";
+                    if (written > 0) {
+                        std::print(", ");
+                        written += 2;
                     }
-                    opt_buffer += std::format("--{}", long_name);
+                    std::print("--{}", long_name);
+                    written += long_name.size() + 2;
                 }
 
                 if (!arg.value_name().empty() && arg.type() == ArgType::Option) {
-                    opt_buffer += std::format(" <{}>", arg.value_name());
+                    std::print(" <{}>", arg.value_name());
+                    written += arg.value_name().size() + 3;
                 }
 
-                if (opt_buffer.size() < max_opt_len) {
-                    opt_buffer += std::string(max_opt_len - opt_buffer.size(), ' ');
+                if (written < max_opt_len) {
+                    std::print("{:{}}", "", max_opt_len - written);
                 }
 
                 if (std::holds_alternative<std::monostate>(arg.default_value())) {
-                    buffer += std::format("    {}    {}\n", opt_buffer, arg.description());
+                    std::println("    {}", arg.description());
                 } else {
-                    buffer += std::format("    {}    {} (default: {})\n", opt_buffer, arg.description(),
-                                          to_formatted(arg.default_value()));
+                    std::println("    {} (default: {})", arg.description(), to_formatted(arg.default_value()));
                 }
             }
         }
-
-        std::print("{}", buffer);
     }
 
 private:
@@ -497,19 +526,17 @@ private:
     bool subcommand_required_ = false;
 
     static constexpr std::string to_formatted(const ValueType& var) {
-        return std::visit(
-            []<typename T>(T&& value) -> std::string {
-                using U = std::remove_cvref_t<T>;
-                if constexpr (std::is_same_v<U, std::monostate>) {
-                    return {};
-                } else if constexpr (std::is_same_v<U, char>) {
-                    return std::format("'{}'", FORWARD(value));
-                } else if constexpr (std::is_same_v<U, std::string>) {
-                    return std::format("\"{}\"", FORWARD(value));
-                } else {
-                    return std::format("{}", FORWARD(value));
-                }
-            }, var);
+        static_assert(std::variant_size_v<ValueType> == 7, "ValueType variant size changed, update to_formatted accordingly");
+        switch (var.index()) {
+        case 0: return "";
+        case 1: return std::format("'{}'", *std::get_if<char>(&var));
+        case 2: return std::format("\"{}\"", *std::get_if<std::string>(&var));
+        case 3: return std::format("{}", *std::get_if<bool>(&var) ? "true" : "false");
+        case 4: return std::format("{}", *std::get_if<i64>(&var));
+        case 5: return std::format("{}", *std::get_if<u64>(&var));
+        case 6: return std::format("{}", *std::get_if<f64>(&var));
+        default: UNREACHABLE();
+        }
     }
 
     ParseResult parse_args(ArgMatches& matches, const int argc, char** argv) const {
@@ -526,11 +553,11 @@ private:
                 shift(current_argc, current_argv);
 
                 ArgMatches temp_matches;
-                auto [res, err] = subcmd.parse_args(temp_matches, current_argc, current_argv);
-                if (err != ParseError::None) return {.matches = {}, .error = err};
+                const auto [res, err] = subcmd.parse_args(temp_matches, current_argc, current_argv);
+                if (err.has_error()) return {.matches = {}, .error = err};
 
-                matches.set_subcommand(std::string(arg), std::make_unique<ArgMatches>(res));
-                return {.matches = matches, .error = ParseError::None};
+                matches.set_subcommand(subcmd.name(), std::make_unique<ArgMatches>(MOVE(res)));
+                return {.matches = matches, .error = ParseError::None()};
             }
 
             // Check for --
@@ -572,16 +599,16 @@ private:
             const bool found = arg.type() == ArgType::Flag ? matches.get_flag(arg.name())
                                                            : matches.get_one<std::string>(arg.name()).has_value();
             if (!found) {
-                return {.matches = {}, .error = ParseError::MissingRequiredArgument};
+                return {.matches = {}, .error = ParseError::MissingRequiredArgument(name_, arg.name())};
             }
         }
 
         // Validate subcommand requirement
         if (subcommand_required_ && !subcommands_.empty() && !matches.subcommand().has_value()) {
-            return {.matches = {}, .error = ParseError::MissingSubcommand};
+            return {.matches = {}, .error = ParseError::MissingRequiredSubcommand(name_)};
         }
 
-        return {.matches = matches, .error = ParseError::None};
+        return {.matches = matches, .error = ParseError::None()};
     }
 
     [[nodiscard]] const Arg* find_positional_arg(const std::size_t index) const {
@@ -616,11 +643,13 @@ private:
             matches.set_flag(arg.name(), true);
         } else if (arg.type() == ArgType::Option) {
             shift(argc, argv);
-            if (argc > 0) matches.add_value(arg.name(), std::string(*argv));
+            if (argc > 0) {
+                matches.add_value(arg.name(), std::string(*argv));
+            }
         }
     }
 };
 
-} // namespace utils::cmd
+} // namespace utils::cli
 
-#endif // UTILS_CMDLINE_HPP
+#endif // UTILS_CLI_HPP
