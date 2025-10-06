@@ -26,7 +26,7 @@ using utils::process::run_sync;
 namespace {
 enum class PortListener: u8 { SS, LSOF };
 
-const std::unordered_map<std::string_view, i32> port_map = {
+const std::unordered_map<std::string_view, i32> PORT_MAP = {
     {"test", 8080}
 };
 
@@ -244,11 +244,11 @@ int main(int argc, char* argv[]) {
     if (const auto name_opt = matches.get_one<std::string>("NAME"); name_opt.has_value()) {
         const std::string& name = *name_opt;
 
-        const auto it = port_map.find(name);
-        if (it == port_map.end()) {
+        const auto it = PORT_MAP.find(name);
+        if (it == PORT_MAP.end()) {
             std::print(stderr, "Unknown name '{}'. Available names: ", name);
             bool first = true;
-            for (const auto& [key, value] : port_map) {
+            for (const auto& [key, value] : PORT_MAP) {
                 if (!first) std::print(stderr, ", ");
                 std::print(stderr, "{} ({})", key, value);
                 first = false;
