@@ -16,7 +16,6 @@
 #include <vector>
 
 using utils::cli::Command;
-using utils::cli::ParseError;
 using utils::cli::arg;
 using utils::process::Redirect;
 using utils::process::close_fd;
@@ -33,10 +32,10 @@ const std::unordered_map<std::string_view, i32> PORT_MAP = {
 // Simple string search without <algorithm> header
 constexpr const char* find_substring(const char* start, const char* end, const std::string_view pattern) {
     if (pattern.empty() || start >= end) return end;
-    
+
     const std::size_t pattern_len = pattern.size();
     const char* search_end = end - pattern_len + 1;
-    
+
     for (const char* pos = start; pos < search_end; ++pos) {
         bool match = true;
         for (std::size_t i = 0; i < pattern_len; ++i) {
@@ -47,35 +46,35 @@ constexpr const char* find_substring(const char* start, const char* end, const s
         }
         if (match) return pos;
     }
-    
+
     return end;
 }
 
 std::vector<int> get_pids_by_lsof(const std::span<char> buffer) {
     std::vector<int> pids;
-    
+
     const char* start = buffer.data();
     const char* end = start + buffer.size();
 
     constexpr auto is_whitespace = [](const char c) {
         return c == ' ' || c == '\t' || c == '\n';
     };
-    
+
     while (start < end) {
         // Skip to next non-whitespace character
         while (start < end && is_whitespace(*start)) ++start;
         if (start >= end) break;
-        
+
         // Find end of current line
         const char* line_end = start;
         while (line_end < end && *line_end != '\n') ++line_end;
-        
+
         int pid = 0;
         auto [ptr, ec] = std::from_chars(start, line_end, pid);
         if (ec == std::errc{} && ptr == line_end) {
             pids.push_back(pid);
         }
-        
+
         start = line_end + 1;
     }
 
@@ -84,24 +83,24 @@ std::vector<int> get_pids_by_lsof(const std::span<char> buffer) {
 
 std::vector<int> get_pids_by_ss(const std::span<char> buffer) {
     std::vector<int> pids;
-    
+
     const char* start = buffer.data();
     const char* end = start + buffer.size();
-    
+
     // Skip first line (header) and newline
     while (start < end && *start != '\n') ++start;
     if (start < end) ++start;
-    
+
     while (start < end) {
         const char* line_end = start;
         while (line_end < end && *line_end != '\n') ++line_end;
-        
+
         const char* users_pos = find_substring(start, line_end, "users:");
         if (users_pos == line_end) {
             start = line_end + 1;
             continue;
         }
-        
+
         // Look for "pid=" after "users:"
         const char* pid_pos = find_substring(users_pos, line_end, "pid=");
         if (pid_pos == line_end) {
@@ -109,17 +108,17 @@ std::vector<int> get_pids_by_ss(const std::span<char> buffer) {
             continue;
         }
         pid_pos += 4; // Move past "pid="
-        
+
         // Find end of PID (comma or closing paren)
         const char* pid_end = pid_pos;
         while (pid_end < line_end && *pid_end != ',' && *pid_end != ')') ++pid_end;
-        
+
         int pid = 0;
         auto [ptr, ec] = std::from_chars(pid_pos, pid_end, pid);
         if (ec == std::errc{} && ptr == pid_end) {
             pids.push_back(pid);
         }
-        
+
         start = line_end + 1;
     }
 
