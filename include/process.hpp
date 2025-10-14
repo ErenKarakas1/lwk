@@ -59,6 +59,7 @@ std::expected<Fd, std::string> open_fd_for_read(const std::string& filename);
 std::expected<Fd, std::string> open_fd_for_write(const std::string& filename);
 void close_fd(Fd fd) noexcept;
 void reset_fd(Fd& fd) noexcept;
+void reset_redirect(Redirect& redirect) noexcept;
 
 std::expected<void, std::string> create_pipe(Fd& read_end, Fd& write_end);
 
@@ -172,10 +173,10 @@ std::string build_cmdline(const std::span<std::string> args) {
 std::vector<const char*> build_cmdline(const std::span<std::string> args) {
     std::vector<const char*> argv;
     argv.reserve(args.size() + 1); // do NOT inline this, we do not want default initialization
-    for (const auto& arg : args) {
-        argv.push_back(arg.c_str());
+    for (std::size_t i = 0; i < args.size(); ++i) {
+        argv[i] = args[i].c_str();
     }
-    argv.push_back(nullptr); // null-terminate the array
+    argv[args.size()] = nullptr; // null-terminate the array
     return argv;
 }
 #endif // _WIN32
@@ -201,13 +202,15 @@ std::expected<Proc, std::string> run_async(const std::span<std::string> args, Re
     ZeroMemory(&pi, sizeof(pi));
 
     // Build command string
-    const std::string command_line = detail::build_cmdline(args);
+    std::string command_line = detail::build_cmdline(args);
     if (command_line.empty()) {
         return std::unexpected("Command line is empty");
     }
 
-    char* cmd_buf = const_cast<char*>(command_line.c_str());
-    if (!CreateProcessA(nullptr, cmd_buf, nullptr, nullptr, TRUE, 0, nullptr, nullptr, &si, &pi)) {
+    std::vector<char> cmd_buf(command_line.begin(), command_line.end());
+    cmd_buf.push_back('\0');
+    if (!CreateProcessA(nullptr, cmd_buf.data(), nullptr, nullptr, TRUE, 0, nullptr, nullptr, &si, &pi)) {
+        if (reset_fds) reset_redirect(redirect);
         return std::unexpected("CreateProcessA failed: " + win32_error_to_string(GetLastError()));
     }
 
@@ -226,7 +229,10 @@ std::expected<Proc, std::string> run_async(const std::span<std::string> args, Re
             posix_spawn_file_actions_destroy(&fa);
             return false;
         }
-        posix_spawn_file_actions_addclose(&fa, src);
+        if (posix_spawn_file_actions_addclose(&fa, src) != 0) {
+            posix_spawn_file_actions_destroy(&fa);
+            return false;
+        }
         return true;
     };
 
@@ -251,17 +257,19 @@ std::expected<Proc, std::string> run_async(const std::span<std::string> args, Re
     posix_spawn_file_actions_destroy(&fa);
 
     if (ec != 0) {
+        if (reset_fds) reset_redirect(redirect);
         return std::unexpected("Could not spawn '" + std::string(argv[0]) + "': " + posix_error_to_string(ec));
     }
 
     Proc proc = child_pid;
 #endif // _WIN32
     if (reset_fds) {
-        reset_fd(redirect.fd_in);
-        reset_fd(redirect.fd_out);
-        reset_fd(redirect.fd_err);
+        reset_redirect(redirect);
+    } else {
+        close_fd(redirect.fd_in);
+        close_fd(redirect.fd_out);
+        close_fd(redirect.fd_err);
     }
-
     return {proc};
 }
 
@@ -299,8 +307,7 @@ std::expected<void, std::string> wait_proc(Proc proc) {
         }
 
         if (WIFEXITED(wstatus)) {
-            const int exit_status = WEXITSTATUS(wstatus);
-            if (exit_status != 0) {
+            if (const int exit_status = WEXITSTATUS(wstatus); exit_status != 0) {
                 return std::unexpected("Child process exited with error code: " + std::to_string(exit_status));
             }
             break;
@@ -323,6 +330,10 @@ std::expected<void, std::string> wait_procs(const std::span<Proc> procs) {
 }
 
 std::expected<Fd, std::string> open_fd_for_read(const std::string& filename) {
+    if (filename.empty()) {
+        return std::unexpected("Filename cannot be empty");
+    }
+
 #ifdef _WIN32
     SECURITY_ATTRIBUTES sa;
     sa.nLength = sizeof(SECURITY_ATTRIBUTES);
@@ -345,6 +356,10 @@ std::expected<Fd, std::string> open_fd_for_read(const std::string& filename) {
 }
 
 std::expected<Fd, std::string> open_fd_for_write(const std::string& filename) {
+    if (filename.empty()) {
+        return std::unexpected("Filename cannot be empty");
+    }
+
 #ifdef _WIN32
     SECURITY_ATTRIBUTES sa;
     sa.nLength = sizeof(SECURITY_ATTRIBUTES);
@@ -366,7 +381,7 @@ std::expected<Fd, std::string> open_fd_for_write(const std::string& filename) {
 #endif // _WIN32
 }
 
-void close_fd(Fd fd) noexcept {
+void close_fd(const Fd fd) noexcept {
     if (fd == INVALID_FD) return;
 #ifdef _WIN32
     CloseHandle(fd);
@@ -379,6 +394,12 @@ void reset_fd(Fd& fd) noexcept {
     if (fd == INVALID_FD) return;
     close_fd(fd);
     fd = INVALID_FD;
+}
+
+void reset_redirect(Redirect& redirect) noexcept {
+    reset_fd(redirect.fd_in);
+    reset_fd(redirect.fd_out);
+    reset_fd(redirect.fd_err);
 }
 
 std::expected<void, std::string> create_pipe(Fd& read_end, Fd& write_end) {
@@ -397,8 +418,15 @@ std::expected<void, std::string> create_pipe(Fd& read_end, Fd& write_end) {
     if (pipe(fds.data()) < 0) {
         return std::unexpected("Could not create pipe: " + posix_error_to_string(errno));
     }
-    if (fcntl(fds[0], F_SETFD, FD_CLOEXEC) < 0 || fcntl(fds[1], F_SETFD, FD_CLOEXEC) < 0) {
-        return std::unexpected("Could not set FD_CLOEXEC flag on pipe: " + posix_error_to_string(errno));
+    if (fcntl(fds[0], F_SETFD, FD_CLOEXEC) < 0) {
+        close_fd(fds[0]);
+        close_fd(fds[1]);
+        return std::unexpected("Could not set FD_CLOEXEC flag on pipe read end: " + posix_error_to_string(errno));
+    }
+    if (fcntl(fds[1], F_SETFD, FD_CLOEXEC) < 0) {
+        close_fd(fds[0]);
+        close_fd(fds[1]);
+        return std::unexpected("Could not set FD_CLOEXEC flag on pipe write end: " + posix_error_to_string(errno));
     }
 #else
     if (pipe2(fds.data(), O_CLOEXEC) < 0) {
@@ -432,7 +460,7 @@ std::string win32_error_to_string(unsigned long error_code) noexcept {
     return {error_message.data(), error_msg_size};
 }
 #else
-std::string posix_error_to_string(int error_code) noexcept {
+std::string posix_error_to_string(const int error_code) noexcept {
     std::array<char, 256> error_message = {};
 #if defined(__APPLE__) || ((_POSIX_C_SOURCE >= 200112L || _XOPEN_SOURCE >= 600) && !_GNU_SOURCE)
     if (strerror_r(error_code, error_message.data(), error_message.size()) != 0) {

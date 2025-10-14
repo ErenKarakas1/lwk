@@ -261,8 +261,8 @@ public:
         return parse_value<T>(it->second.front());
     }
 
-    [[nodiscard]] std::vector<std::string> get_many(const std::string_view name) const {
-        const auto it = values_.find(std::string(name));
+    [[nodiscard]] std::vector<std::string> get_many(const std::string& name) const {
+        const auto it = values_.find(name);
         if (it == values_.end() || it->second.empty()) {
             return {};
         }
@@ -328,15 +328,15 @@ struct ParseError {
         return type != ParseErrorType::None;
     }
 
-    static constexpr ParseError None() {
+    static ParseError None() {
         return {.type = ParseErrorType::None, .message = ""};
     }
 
-    static constexpr ParseError MissingRequiredArgument(const std::string& cmd_name, const std::string& arg_name) {
+    static ParseError MissingRequiredArgument(const std::string& cmd_name, const std::string& arg_name) {
         return {.type = ParseErrorType::MissingRequiredArgument, .message = std::format("Missing required argument '{}' for command '{}'", arg_name, cmd_name)};
     }
 
-    static constexpr ParseError MissingRequiredSubcommand(const std::string& cmd_name) {
+    static ParseError MissingRequiredSubcommand(const std::string& cmd_name) {
         return {.type = ParseErrorType::MissingRequiredSubcommand, .message = std::format("Missing required subcommand for command '{}'", cmd_name)};
     }
 };
