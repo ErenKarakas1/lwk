@@ -10,7 +10,6 @@
 #define UTILS_PROCESS_HPP
 
 #include <expected>
-#include <span>
 #include <string>
 #include <vector>
 
@@ -38,22 +37,22 @@ struct Redirect {
     Fd fd_err = INVALID_FD;
 };
 
-std::expected<Proc, std::string> run_async(std::span<std::string> args, Redirect& redirect, bool reset_fds = true);
+std::expected<Proc, std::string> run_async(const std::vector<std::string>& args, Redirect& redirect, bool reset_fds = true);
 
-inline std::expected<Proc, std::string> run_async(const std::span<std::string> args) {
+inline std::expected<Proc, std::string> run_async(const std::vector<std::string>& args) {
     Redirect redirect;
     return run_async(args, redirect);
 }
 
-std::expected<void, std::string> run_sync(std::span<std::string> args, Redirect& redirect, bool reset_fds = true);
+std::expected<void, std::string> run_sync(const std::vector<std::string>& args, Redirect& redirect, bool reset_fds = true);
 
-inline std::expected<void, std::string> run_sync(const std::span<std::string> args) {
+inline std::expected<void, std::string> run_sync(const std::vector<std::string>& args) {
     Redirect redirect;
     return run_sync(args, redirect);
 }
 
 std::expected<void, std::string> wait_proc(Proc proc);
-std::expected<void, std::string> wait_procs(std::span<Proc> procs);
+std::expected<void, std::string> wait_procs(const std::vector<Proc>& procs);
 
 std::expected<Fd, std::string> open_fd_for_read(const std::string& filename);
 std::expected<Fd, std::string> open_fd_for_write(const std::string& filename);
@@ -73,9 +72,9 @@ namespace detail {
 #ifdef _WIN32
 void argv_quote(std::string& result, const std::string_view argument);
 void cmd_escape(std::string& cmd_line, const std::size_t start_pos);
-std::string build_cmdline(std::span<std::string> args);
+std::string build_cmdline(const std::vector<std::string>& args);
 #else
-std::vector<const char*> build_cmdline(std::span<std::string> args);
+std::vector<const char*> build_cmdline(const std::vector<std::string>& args);
 #endif // _WIN32
 } // namespace detail
 
@@ -108,6 +107,7 @@ std::vector<const char*> build_cmdline(std::span<std::string> args);
 #include <spawn.h>
 #include <sys/wait.h>
 #include <unistd.h>
+extern char** environ;
 #endif // _WIN32
 
 namespace utils::process {
@@ -158,7 +158,7 @@ void cmd_escape(std::string& cmd_line, const std::size_t start_pos) {
     }
 }
 
-std::string build_cmdline(const std::span<std::string> args) {
+std::string build_cmdline(const std::vector<std::string>& args) {
     std::string cmd_line;
     cmd_line.reserve(128);
     for (std::size_t i = 0; i < args.size(); ++i) {
@@ -170,19 +170,19 @@ std::string build_cmdline(const std::span<std::string> args) {
     return cmd_line;
 }
 #else
-std::vector<const char*> build_cmdline(const std::span<std::string> args) {
+std::vector<const char*> build_cmdline(const std::vector<std::string>& args) {
     std::vector<const char*> argv;
     argv.reserve(args.size() + 1); // do NOT inline this, we do not want default initialization
-    for (std::size_t i = 0; i < args.size(); ++i) {
-        argv[i] = args[i].c_str();
+    for (const std::string& s : args) {
+        argv.push_back(s.c_str());
     }
-    argv[args.size()] = nullptr; // null-terminate the array
+    argv.push_back(nullptr); // null-terminate the array
     return argv;
 }
 #endif // _WIN32
 } // namespace detail
 
-std::expected<Proc, std::string> run_async(const std::span<std::string> args, Redirect& redirect,
+std::expected<Proc, std::string> run_async(const std::vector<std::string>& args, Redirect& redirect,
                                            const bool reset_fds) {
     if (args.empty()) return std::unexpected("No command specified");
 
@@ -193,9 +193,9 @@ std::expected<Proc, std::string> run_async(const std::span<std::string> args, Re
 
     if (redirect.fd_in != INVALID_FD || redirect.fd_out != INVALID_FD || redirect.fd_err != INVALID_FD) {
         si.dwFlags |= STARTF_USESTDHANDLES;
-        si.hStdInput = redirect.fd_in == INVALID_FD ? GetStdHandle(STD_INPUT_HANDLE) : redirect.fd_in;
+        si.hStdInput  = redirect.fd_in  == INVALID_FD ? GetStdHandle(STD_INPUT_HANDLE)  : redirect.fd_in;
         si.hStdOutput = redirect.fd_out == INVALID_FD ? GetStdHandle(STD_OUTPUT_HANDLE) : redirect.fd_out;
-        si.hStdError = redirect.fd_err == INVALID_FD ? GetStdHandle(STD_ERROR_HANDLE) : redirect.fd_err;
+        si.hStdError  = redirect.fd_err == INVALID_FD ? GetStdHandle(STD_ERROR_HANDLE)  : redirect.fd_err;
     }
 
     PROCESS_INFORMATION pi;
@@ -253,7 +253,7 @@ std::expected<Proc, std::string> run_async(const std::span<std::string> args, Re
     }
 
     pid_t child_pid;
-    const int ec = posix_spawnp(&child_pid, argv[0], &fa, nullptr, const_cast<char* const*>(argv.data()), nullptr);
+    const int ec = posix_spawnp(&child_pid, argv[0], &fa, nullptr, const_cast<char* const*>(argv.data()), environ);
     posix_spawn_file_actions_destroy(&fa);
 
     if (ec != 0) {
@@ -263,17 +263,11 @@ std::expected<Proc, std::string> run_async(const std::span<std::string> args, Re
 
     Proc proc = child_pid;
 #endif // _WIN32
-    if (reset_fds) {
-        reset_redirect(redirect);
-    } else {
-        close_fd(redirect.fd_in);
-        close_fd(redirect.fd_out);
-        close_fd(redirect.fd_err);
-    }
+    if (reset_fds) reset_redirect(redirect);
     return {proc};
 }
 
-std::expected<void, std::string> run_sync(const std::span<std::string> args, Redirect& redirect,
+std::expected<void, std::string> run_sync(const std::vector<std::string>& args, Redirect& redirect,
                                           const bool reset_fds) {
     const auto result = run_async(args, redirect, reset_fds);
     if (!result) return std::unexpected(result.error());
@@ -321,7 +315,7 @@ std::expected<void, std::string> wait_proc(Proc proc) {
 #endif // _WIN32
 }
 
-std::expected<void, std::string> wait_procs(const std::span<Proc> procs) {
+std::expected<void, std::string> wait_procs(const std::vector<Proc>& procs) {
     for (const Proc& proc : procs) {
         const auto result = wait_proc(proc);
         if (!result) return std::unexpected(result.error());

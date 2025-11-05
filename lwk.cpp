@@ -4,7 +4,6 @@
 #define UTILS_PROCESS_IMPLEMENTATION
 #include "include/process.hpp"
 
-#include <array>
 #include <charconv>
 #include <expected>
 #include <format>
@@ -50,6 +49,8 @@ constexpr const char* find_substring(const char* start, const char* end, const s
     return end;
 }
 
+constexpr auto no_error = std::errc{};
+
 std::vector<int> get_pids_by_lsof(const std::span<char> buffer) {
     std::vector<int> pids;
 
@@ -71,7 +72,7 @@ std::vector<int> get_pids_by_lsof(const std::span<char> buffer) {
 
         int pid = 0;
         auto [ptr, ec] = std::from_chars(start, line_end, pid);
-        if (ec == std::errc{} && ptr == line_end) {
+        if (ec == no_error && ptr == line_end) {
             pids.push_back(pid);
         }
 
@@ -115,7 +116,7 @@ std::vector<int> get_pids_by_ss(const std::span<char> buffer) {
 
         int pid = 0;
         auto [ptr, ec] = std::from_chars(pid_pos, pid_end, pid);
-        if (ec == std::errc{} && ptr == pid_end) {
+        if (ec == no_error && ptr == pid_end) {
             pids.push_back(pid);
         }
 
@@ -138,7 +139,7 @@ std::expected<std::vector<int>, std::string> get_pids_by_port(const int port, co
     std::vector<std::string> args;
     switch (listener) {
         case PortListener::SS:      args = {"ss", "-tlnp", "sport", "eq", std::to_string(port)}; break;
-        case PortListener::LSOF:    args = {"lsof", "-ti", ":" + std::to_string(port)}; break;
+        case PortListener::LSOF:    args = {"lsof", "-ti", ":" + std::to_string(port)};          break;
         default:                    UNREACHABLE();
     }
 
@@ -148,7 +149,7 @@ std::expected<std::vector<int>, std::string> get_pids_by_port(const int port, co
         return std::unexpected(std::format("Error running '{}': {}", args[0], result.error()));
     }
 
-    std::array<char, 4096> buffer{};
+    std::vector<char> buffer(4096);
     const ssize_t bytes_read = read(read_end, buffer.data(), buffer.size() - 1);
     close_fd(read_end);
 
@@ -168,7 +169,7 @@ std::expected<std::vector<int>, std::string> get_pids_by_port(const int port, co
 bool kill_processes(const std::vector<int>& pids) {
     bool all_success = true;
 
-    std::array<std::string, 2> kill_args = {"kill", ""};
+    std::vector<std::string> kill_args = {"kill", ""};
     for (const int pid : pids) {
         kill_args[1] = std::to_string(pid);
         if (const auto result = run_sync(kill_args); !result.has_value()) {
@@ -214,10 +215,8 @@ int main(int argc, char* argv[]) {
             .about("Use 'lsof' to find processes"))
         .arg(arg("-p --port <PORT>")
             .about("Kill processes using the specified port"))
-        .arg(arg("<NAME>")
-            .required(false))
-        .arg(arg("-h --help")
-            .about("Show this help message"));
+        .arg(arg("[NAME]")
+            .about("Predefined name for a port"));
 
     auto [matches, err] = app.get_matches(argc, argv);
 
@@ -234,15 +233,12 @@ int main(int argc, char* argv[]) {
 
     const PortListener listener = matches.get_flag("lsof") ? PortListener::LSOF : PortListener::SS;
 
-    // Check for port flag
     if (const auto port_opt = matches.get_one<int>("port"); port_opt.has_value()) {
         return handle_port(*port_opt, listener);
     }
 
-    // Check for name argument
     if (const auto name_opt = matches.get_one<std::string>("NAME"); name_opt.has_value()) {
         const std::string& name = *name_opt;
-
         const auto it = PORT_MAP.find(name);
         if (it == PORT_MAP.end()) {
             std::print(stderr, "Unknown name '{}'. Available names: ", name);
@@ -255,12 +251,9 @@ int main(int argc, char* argv[]) {
             std::println(stderr);
             return 1;
         }
-
         return handle_port(it->second, listener, name);
     }
 
-    // No valid arguments provided
-    std::println(stderr, "Please specify either -p <port> or <name>\n");
     app.print_help();
-    return 1;
+    return 0;
 }

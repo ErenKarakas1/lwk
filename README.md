@@ -6,14 +6,14 @@ Simple wrapper around `lsof`/`ss` + `kill` to find and kill lingering processes.
 
 ```bash
 $ lwk --help  
-Usage: lwk [NAME] [OPTIONS]
 Kill processes by port number or predefined names
+Usage: lwk [NAME] [OPTIONS]
 
 Options:
+    -h, --help           Show this help message
     --ss                 Use 'ss' to find processes (default)
     --lsof               Use 'lsof' to find processes
     -p, --port <PORT>    Kill processes using the specified port
-    -h, --help           Show this help message
 ```
 
 Modify the `PORT_MAP` hashmap in `lwk.cpp` to add your own predefined names.
